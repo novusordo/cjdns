@@ -14,133 +14,84 @@
  */
 #include "interface/Interface.h"
 #include "interface/TUNInterface.h"
-#include "benc/String.h"
-#include "util/Endian.h"
 #include "util/Errno.h"
+#include "util/events/Event.h"
+#include "util/Identity.h"
+#include "util/platform/Socket.h"
+#include "util/log/Log.h"
+#include "wire/Ethernet.h"
 
-#include "util/platform/libc/string.h"
-#include <event2/event.h>
-#include <net/if.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
 #include <unistd.h>
-
-#ifdef Linux
-    #include <linux/if_ether.h>
-    #define INET6_ETHERTYPE ETH_P_IPV6
-#else
-    #include <netinet/in.h>
-    #include <netinet/if_ether.h>
-    #define INET6_ETHERTYPE PF_INET6
-#endif
 
 // Defined extra large so large MTU can be taken advantage of later.
 #define MAX_PACKET_SIZE 8192
 #define PADDING_SPACE (10240 - MAX_PACKET_SIZE)
 
-// The number of bytes at the beginning of the message which is used
-// to contain the type of packet.
-#ifdef Illumos
-    #define PACKET_INFO_SIZE 0
-#else
-    #define PACKET_INFO_SIZE 4
-
-    static void setPacketInfo(uint8_t* toLocation)
-    {
-        ((uint16_t*) toLocation)[0] = 0;
-        ((uint16_t*) toLocation)[1] = Endian_bigEndianToHost16(INET6_ETHERTYPE);
-    }
-#endif
-
-
-struct Context
+struct TUNInterface_pvt
 {
     struct TUNInterface pub;
-    struct event* incomingEvent;
-    int fileDescriptor;
+    Socket tunSocket;
+    struct Log* logger;
+    Identity
 };
 
-static void closeInterface(void* vcontext)
+static void handleEvent(void* vcontext)
 {
-    struct Context* tun = vcontext;
-    close(tun->fileDescriptor);
-    event_del(tun->incomingEvent);
-    event_free(tun->incomingEvent);
-}
+    struct TUNInterface_pvt* tun = Identity_cast((struct TUNInterface_pvt*) vcontext);
 
-static void handleEvent(evutil_socket_t socket, short eventType, void* vcontext)
-{
-    // 292 bytes of extra padding to build headers back from for better efficiency.
-    uint8_t messageBuffer[MAX_PACKET_SIZE + PADDING_SPACE];
+    struct Message* msg;
+    Message_STACK(msg, MAX_PACKET_SIZE, PADDING_SPACE);
 
-    struct Message message = {
-        .bytes = messageBuffer + PADDING_SPACE,
-        .padding = PADDING_SPACE,
-        .length = MAX_PACKET_SIZE
-    };
+    ssize_t length = read(tun->tunSocket, msg->bytes, msg->length);
 
-    ssize_t length =
-        read(socket, messageBuffer + PADDING_SPACE - PACKET_INFO_SIZE, MAX_PACKET_SIZE);
-
-    if (length < 0) {
-        printf("Error reading from TUN device %d\n", (int) length);
+    if (length < 4) {
+        Log_warn(tun->logger, "Error reading from TUN device [%s]", Errno_getString());
         return;
     }
-    message.length = length - PACKET_INFO_SIZE;
+    msg->length = length;
 
-    struct Interface* iface = &((struct Context*) vcontext)->pub.iface;
+    struct Interface* iface = &tun->pub.iface;
     if (iface->receiveMessage) {
-        iface->receiveMessage(&message, iface);
+        iface->receiveMessage(msg, iface);
     }
 }
 
 static uint8_t sendMessage(struct Message* message, struct Interface* iface)
 {
-    #if PACKET_INFO_SIZE > 0
-        // The type of packet we send,
-        // older linux kernels need this hint otherwise they assume it's ipv4.
-        Message_shift(message, PACKET_INFO_SIZE);
-        setPacketInfo(message->bytes);
-    #endif
+    struct TUNInterface_pvt* tun = Identity_cast((struct TUNInterface_pvt*) iface);
 
-    struct Context* tun = iface->senderContext;
-    ssize_t ret = write(tun->fileDescriptor, message->bytes, message->length);
+    ssize_t ret = write(tun->tunSocket, message->bytes, message->length);
     if (ret < 0) {
-        printf("Error writing to TUN device %d\n", Errno_get());
+        Log_warn(tun->logger, "Error writing to TUN device [%s]", Errno_getString());
     }
     // TODO: report errors
     return 0;
 }
 
 struct TUNInterface* TUNInterface_new(void* tunSocket,
-                                      struct event_base* base,
-                                      struct Allocator* allocator)
+                                      struct EventBase* base,
+                                      struct Allocator* allocator,
+                                      struct Log* logger)
 {
-    int tunFileDesc = (int) ((intptr_t) tunSocket);
+    Socket tunSock = (Socket) ((intptr_t) tunSocket);
 
-    evutil_make_socket_nonblocking(tunFileDesc);
+    Socket_makeNonBlocking(tunSock);
 
-    struct Context* tun = allocator->malloc(sizeof(struct Context), allocator);
-    tun->incomingEvent = event_new(base, tunFileDesc, EV_READ | EV_PERSIST, handleEvent, tun);
-    tun->fileDescriptor = tunFileDesc;
+    struct TUNInterface_pvt* tun = Allocator_clone(allocator, (&(struct TUNInterface_pvt) {
+        .pub = {
+            .iface = {
+                .sendMessage = sendMessage,
+                .allocator = allocator,
+                .requiredPadding = 0,
+                .maxMessageLength = MAX_PACKET_SIZE
+            }
+        },
+        .tunSocket = tunSock,
+        .logger = logger
+    }));
+    Identity_set(tun);
 
-    if (tun->incomingEvent == NULL) {
-        abort();
-    }
-
-    struct Interface iface = {
-        .senderContext = tun,
-        .sendMessage = sendMessage,
-        .allocator = allocator,
-        .requiredPadding = 0,
-        .maxMessageLength = MAX_PACKET_SIZE
-    };
-
-    Bits_memcpyConst(&tun->pub.iface, &iface, sizeof(struct Interface));
-
-    event_add(tun->incomingEvent, NULL);
-
-    allocator->onFree(closeInterface, tun, allocator);
+    Event_socketRead(handleEvent, tun, tunSock, base, allocator, NULL);
 
     return &tun->pub;
 }

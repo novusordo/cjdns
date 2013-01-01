@@ -35,6 +35,11 @@ if(WIN32)
     # BufferAllocator.c:1:0: error: -fPIC ignored for target (all code is position independent)
     set(WITH_PIE OFF CACHE INTERNAL "" FORCE)
 endif()
+if(CMAKE_CROSSCOMPILING)
+    if (NOT "$ENV{REMOTE_TEST_IP_PORT}" STREQUAL "")
+        set(REMOTE_TEST_IP_PORT "$ENV{REMOTE_TEST_IP_PORT}")
+    endif()
+endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL SunOS)
     set(ILLUMOS TRUE)
@@ -198,7 +203,8 @@ add_definitions("-D CJDNS_MAX_PEERS=${CJDNS_MAX_PEERS}")
 # make sure casts are done properly.
 add_definitions("-D Identity_CHECK=1")
 
-
+# add in a billion checks which slow things down but catch bugs.
+add_definitions("-D PARANOIA=1")
 
 include_directories(${CMAKE_SOURCE_DIR})
 
@@ -225,6 +231,16 @@ add_executable(cleanconfig
     cleanconfig.c
 )
 target_link_libraries(cleanconfig
+    cjdbenc_JsonBencSerializer
+    cjdbenc
+    cjdmemory
+    cjdio
+)
+add_executable(benc2json
+    benc2json.c
+)
+target_link_libraries(benc2json
+    cjdbenc_StandardBencSerializer
     cjdbenc_JsonBencSerializer
     cjdbenc
     cjdmemory

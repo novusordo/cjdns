@@ -17,7 +17,7 @@
 #include "exception/Jmp.h"
 #include "interface/UDPInterface.h"
 #include "memory/Allocator.h"
-#include "net/InterfaceController.h"
+#include "interface/InterfaceController.h"
 #include "util/Errno.h"
 #include "crypto/Key.h"
 
@@ -88,7 +88,7 @@ static void newInterface(Dict* args, void* vcontext, String* txid)
 {
     struct Context* const ctx = vcontext;
     String* const bindAddress = Dict_getString(args, String_CONST("bindAddress"));
-    struct Allocator* const alloc = ctx->allocator->child(ctx->allocator);
+    struct Allocator* const alloc = Allocator_child(ctx->allocator);
 
     struct UDPInterface* udpIf = NULL;
     struct Jmp jmp;

@@ -16,7 +16,9 @@
 #define string_strlen
 #include "memory/Allocator.h"
 #include "memory/MallocAllocator.h"
+#include "memory/CanaryAllocator.h"
 #include "io/FileWriter.h"
+#include "interface/TUNMessageType.h"
 #include "util/log/Log.h"
 #include "util/log/WriterLog.h"
 #include "util/events/EventBase.h"
@@ -28,6 +30,7 @@
 #include "util/Checksum.h"
 #include "wire/Message.h"
 #include "wire/Headers.h"
+#include "wire/Ethernet.h"
 
 static uint8_t* fakePubKey = (uint8_t*) "abcdefghijklmnopqrstuvwxyz012345";
 static uint8_t nodeCjdnsIp6[16];
@@ -71,6 +74,7 @@ uint8_t responseWithIpCallback(struct Message* message, struct Interface* iface)
 
 uint8_t messageToTun(struct Message* message, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(message) == Ethernet_TYPE_IP6);
     struct Headers_IP6Header* ip = (struct Headers_IP6Header*) message->bytes;
     Assert_always(Headers_getIpVersion(ip) == 6);
     uint16_t length = Endian_bigEndianToHost16(ip->payloadLength_be);
@@ -84,13 +88,13 @@ uint8_t messageToTun(struct Message* message, struct Interface* iface)
 int main()
 {
     AddressCalc_addressForPublicKey(nodeCjdnsIp6, fakePubKey);
-    struct Allocator* alloc = MallocAllocator_new(1<<20);
+    struct Allocator* alloc = CanaryAllocator_new(MallocAllocator_new(1<<20), NULL);
     struct Writer* w = FileWriter_new(stdout, alloc);
     struct Log* logger = WriterLog_new(w, alloc);
     struct Random* rand = Random_new(alloc, NULL);
     struct EventBase* eb = EventBase_new(alloc);
 
-    struct IpTunnel* ipTun = IpTunnel_new(logger, eb, alloc, rand);
+    struct IpTunnel* ipTun = IpTunnel_new(logger, eb, alloc, rand, NULL);
     IpTunnel_allowConnection(fakePubKey, fakeIp6ToGive, NULL, ipTun);
 
     struct Message* message;

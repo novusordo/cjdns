@@ -15,14 +15,19 @@
 #ifndef UDPInterface_H
 #define UDPInterface_H
 
-#include "util/events/EventBase.h"
-
 #include "interface/Interface.h"
-#include "net/InterfaceController.h"
-#include "util/log/Log.h"
+#include "interface/InterfaceController.h"
 #include "memory/Allocator.h"
+#include "util/events/EventBase.h"
+#include "util/log/Log.h"
 
-struct UDPInterface;
+struct UDPInterface
+{
+    struct Interface generic;
+
+    /** Used for testing. */
+    uint16_t boundPort_be;
+};
 
 /**
  * @param base the LibEvent context.

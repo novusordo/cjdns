@@ -12,6 +12,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include "crypto/AddressCalc.h"
 #include "crypto/CryptoAuth.h"
 #include "util/log/Log.h"
 #include "dht/Address.h"
@@ -20,6 +21,7 @@
 #include "dht/DHTModuleRegistry.h"
 #include "dht/dhtcore/Node.h"
 #include "dht/dhtcore/RouterModule.h"
+#include "interface/TUNMessageType.h"
 #include "interface/Interface.h"
 #include "interface/SessionManager.h"
 #include "util/log/Log.h"
@@ -37,6 +39,7 @@
 #include "wire/Control.h"
 #include "wire/Error.h"
 #include "wire/Headers.h"
+#include "wire/Ethernet.h"
 
 #include <stdint.h>
 #include <event2/event.h>
@@ -284,6 +287,11 @@ static inline uint8_t incomingForMe(struct Message* message,
         return Error_UNDELIVERABLE;
     }
 
+    // prevent router advertizement schenanigans
+    if (context->ip6Header->hopLimit == 255) {
+        context->ip6Header->hopLimit--;
+    }
+
     // Now write a message to the TUN device.
     // Need to move the ipv6 header forward up to the content because there's a crypto header
     // between the ipv6 header and the content which just got eaten.
@@ -295,6 +303,9 @@ static inline uint8_t incomingForMe(struct Message* message,
                 Endian_bigEndianToHost16(context->ip6Header->payloadLength_be) - sizeDiff);
         Bits_memmoveConst(message->bytes, context->ip6Header, Headers_IP6Header_SIZE);
     }
+
+    TUNMessageType_push(message, Ethernet_TYPE_IP6);
+
     context->userIf->sendMessage(message, context->userIf);
     return Error_NONE;
 }
@@ -385,8 +396,8 @@ static inline bool validEncryptedIP6(struct Message* message)
     struct Headers_IP6Header* header = (struct Headers_IP6Header*) message->bytes;
     // Empty ipv6 headers are tolerated at this stage but dropped later.
     return message->length >= Headers_IP6Header_SIZE
-        && header->sourceAddr[0] == 0xFC
-        && header->destinationAddr[0] == 0xFC;
+        && AddressCalc_validAddress(header->sourceAddr)
+        && AddressCalc_validAddress(header->destinationAddr);
 }
 
 static inline bool isForMe(struct Message* message, struct Ducttape_pvt* context)
@@ -400,15 +411,23 @@ static inline uint8_t incomingFromTun(struct Message* message,
                                       struct Interface* iface)
 {
     struct Ducttape_pvt* context = Identity_cast((struct Ducttape_pvt*) iface->receiverContext);
+
+    uint16_t ethertype = TUNMessageType_pop(message);
+
     struct Headers_IP6Header* header = (struct Headers_IP6Header*) message->bytes;
 
     int version = Headers_getIpVersion(message->bytes);
-    if (version == 4 || (version == 6 && header->sourceAddr[0] != 0xfc)) {
+    if ((ethertype == Ethernet_TYPE_IP4 && version != 4)
+        || (ethertype == Ethernet_TYPE_IP6 && version != 6))
+    {
+        Log_warn(context->logger, "dropped packet because ip version [%d] "
+                 "doesn't match ethertype [%u].", version, Endian_bigEndianToHost16(ethertype));
+        return Error_INVALID;
+    }
+
+    if (ethertype != Ethernet_TYPE_IP6 || !AddressCalc_validAddress(header->sourceAddr)) {
         return context->ipTunnel->tunInterface.sendMessage(message,
                                                            &context->ipTunnel->tunInterface);
-    } else if (version != 6) {
-        Log_warn(context->logger, "dropped packet with unexpected IP version [%d].", version);
-        return Error_INVALID;
     }
 
     if (Bits_memcmp(header->sourceAddr, context->myAddr.ip6.bytes, 16)) {
@@ -479,6 +498,14 @@ static inline uint8_t incomingFromTun(struct Message* message,
     Message_shift(message, -(Headers_IP6Header_SIZE + Headers_CryptoAuth_SIZE));
     // The message is now aligned on the content.
 
+    #ifdef Log_DEBUG
+        uint8_t destAddr[40];
+        AddrTools_printIp(destAddr, header->destinationAddr);
+        uint8_t nhAddr[60];
+        Address_print(nhAddr, &bestNext->address);
+        Log_debug(context->logger, "Sending to [%s] via [%s]", destAddr, nhAddr);
+    #endif
+
     // This comes out at outgoingFromCryptoAuth() then outgoingFromMe()
     context->session = session;
     context->layer = Ducttape_SessionLayer_INNER;
@@ -494,6 +521,7 @@ static inline uint8_t incomingFromTun(struct Message* message,
 static uint8_t sendToNode(struct Message* message, struct Interface* iface)
 {
     struct Ducttape_pvt* context = Identity_cast((struct Ducttape_pvt*)iface->receiverContext);
+    context->switchHeader = NULL;
     struct IpTunnel_PacketInfoHeader* header = (struct IpTunnel_PacketInfoHeader*) message->bytes;
     Message_shift(message, -IpTunnel_PacketInfoHeader_SIZE);
     struct Node* n = RouterModule_lookup(header->nodeIp6Addr, context->routerModule);
@@ -905,7 +933,7 @@ static inline uint8_t* extractPublicKey(struct Message* message,
     }
 
     AddressCalc_addressForPublicKey(ip6, caHeader->handshake.publicKey);
-    if (ip6[0] != 0xfc) {
+    if (!AddressCalc_validAddress(ip6)) {
         *version = *version - 1;
         return extractPublicKey(message, version, ip6);
     }

@@ -26,6 +26,7 @@
 #include "util/log/WriterLog.h"
 #include "util/events/EventBase.h"
 #include "util/platform/libc/string.h"
+#include "memory/CanaryAllocator.h"
 #include "memory/MallocAllocator.h"
 #include "memory/Allocator.h"
 #include "switch/NumberCompress.h"
@@ -69,9 +70,9 @@ static int reconnectionNewEndpointTest(struct InterfaceController* ifController,
         .sendMessage = messageFromInterface,
         .senderContext = &message
     };
-    ifController->registerInterface(&icIface, ifController);
 
-    char* majic = "\xDE\xAD\xBE\xEF\xCA\xFE\xBA\xBE";
+    InterfaceController_registerPeer(ifController, NULL, NULL, true, &icIface);
+
     uint8_t hexBuffer[1025];
 
     for (int i = 0; i < 4; i++) {
@@ -89,10 +90,6 @@ static int reconnectionNewEndpointTest(struct InterfaceController* ifController,
         }), Headers_SwitchHeader_SIZE);
 
         wrapped->sendMessage(outgoing, wrapped);
-
-        // add the id tag
-        Message_shift(outgoing, InterfaceController_KEY_SIZE);
-        Bits_memcpyConst(outgoing->bytes, majic, InterfaceController_KEY_SIZE);
 
         *fromSwitchPtr = NULL;
 
@@ -118,14 +115,11 @@ static int reconnectionNewEndpointTest(struct InterfaceController* ifController,
             printf("sending back response.\n");
             routerIf->receiveMessage(message, routerIf);
             printf("forwarding response to external cryptoAuth.\n");
-            Message_shift(message, -InterfaceController_KEY_SIZE);
             iface.receiveMessage(message, &iface);
             printf("forwarded.\n");
         } else {
             printf("not responding because we don't want to establish a connection yet.\n");
         }
-
-        majic = "\xC0\xFF\xEE\x00\x11\x22\x33\x44";
     }
 
     // check everything except the label
@@ -146,7 +140,7 @@ static int reconnectionNewEndpointTest(struct InterfaceController* ifController,
 
 int main()
 {
-    struct Allocator* alloc = MallocAllocator_new(1<<20);
+    struct Allocator* alloc = CanaryAllocator_new(MallocAllocator_new(1<<20), NULL);
 
     struct TestFramework* tf =
         TestFramework_setUp("\xad\x7e\xa3\x26\xaa\x01\x94\x0a\x25\xbc\x9e\x01\x26\x22\xdb\x69"

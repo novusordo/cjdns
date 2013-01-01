@@ -29,14 +29,18 @@ add_library(interface
     ${ethif}
     ${tunif}
     TUNConfigurator_${SYSTEM}.c
+    TUNMessageType.c
     InterfaceConnector.c
     SessionManager.c
+    ICMP6Generator.c
+    MultiInterface.c
 )
 
 target_link_libraries(interface
     util
     cjdns-crypto-key
-    ${LIBEVENT2_LIBRARIES}
+    cjdns-util-events-libevent
+    cjdns-util-platform-socket
 )
 
 add_library(cjdns-interface-pipeinterface

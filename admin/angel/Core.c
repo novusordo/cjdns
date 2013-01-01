@@ -23,6 +23,7 @@
 #include "benc/Int.h"
 #include "benc/serialization/BencSerializer.h"
 #include "benc/serialization/standard/StandardBencSerializer.h"
+#include "crypto/AddressCalc.h"
 #include "crypto/Random.h"
 #include "dht/ReplyModule.h"
 #include "dht/SerializationModule.h"
@@ -34,6 +35,8 @@
 #include "interface/TUNConfigurator.h"
 #include "interface/TUNInterface.h"
 #include "interface/PipeInterface.h"
+#include "interface/InterfaceConnector.h"
+#include "interface/ICMP6Generator.h"
 #include "io/ArrayReader.h"
 #include "io/ArrayWriter.h"
 #include "io/FileWriter.h"
@@ -41,6 +44,7 @@
 #include "io/Writer.h"
 #include "memory/Allocator.h"
 #include "memory/MallocAllocator.h"
+#include "memory/CanaryAllocator.h"
 #include "net/Ducttape.h"
 #include "net/DefaultInterfaceController.h"
 #include "net/SwitchPinger.h"
@@ -93,7 +97,7 @@ static void parsePrivateKey(uint8_t privateKey[32],
 {
     crypto_scalarmult_curve25519_base(addr->key, privateKey);
     AddressCalc_addressForPublicKey(addr->ip6.bytes, addr->key);
-    if (addr->ip6.bytes[0] != 0xFC) {
+    if (!AddressCalc_validAddress(addr->ip6.bytes)) {
         Except_raise(eh, -1, "Ip address outside of the FC00/8 range, invalid private key.");
     }
 }
@@ -157,10 +161,15 @@ void Core_initTunnel(String* desiredDeviceName,
                                            logger,
                                            eh);
 
-    struct TUNInterface* tun = TUNInterface_new(tunPtr, eventBase, alloc);
+    struct TUNInterface* tun = TUNInterface_new(tunPtr, eventBase, alloc, logger);
+
+    // broken
+    //struct ICMP6Generator* icmp = ICMP6Generator_new(alloc);
+    //InterfaceConnector_connect(&icmp->external, &tun->iface);
+    //Ducttape_setUserInterface(dt, &icmp->internal);
     Ducttape_setUserInterface(dt, &tun->iface);
 
-    TUNConfigurator_setIpAddress(assignedTunName, ipAddr, addressPrefix, logger, eh);
+    TUNConfigurator_addIp6Address(assignedTunName, ipAddr, addressPrefix, logger, eh);
     TUNConfigurator_setMTU(assignedTunName, DEFAULT_MTU, logger, eh);
 }
 
@@ -185,8 +194,9 @@ int Core_main(int argc, char** argv)
     }
 
     struct Allocator* alloc = MallocAllocator_new(ALLOCATOR_FAILSAFE);
-    struct EventBase* eventBase = EventBase_new(alloc);
     struct Random* rand = Random_new(alloc, eh);
+    alloc = CanaryAllocator_new(alloc, rand);
+    struct EventBase* eventBase = EventBase_new(alloc);
 
     // -------------------- Setup the Pre-Logger ---------------------- //
     struct Writer* logWriter = FileWriter_new(stdout, alloc);
@@ -246,7 +256,7 @@ int Core_main(int argc, char** argv)
 
     SerializationModule_register(registry, logger, alloc);
 
-    struct IpTunnel* ipTun = IpTunnel_new(logger, eventBase, alloc, rand);
+    struct IpTunnel* ipTun = IpTunnel_new(logger, eventBase, alloc, rand, admin);
 
     struct Ducttape* dt = Ducttape_register(privateKey,
                                             registry,

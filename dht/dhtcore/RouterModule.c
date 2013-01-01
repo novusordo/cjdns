@@ -16,6 +16,7 @@
 
 #include "benc/Int.h"
 #include "benc/Object.h"
+#include "crypto/AddressCalc.h"
 #include "dht/Address.h"
 #include "dht/dhtcore/Janitor.h"
 #include "dht/dhtcore/RouterModule_pvt.h"
@@ -190,6 +191,9 @@
 
 #define LINK_STATE_MULTIPLIER 536870
 
+/** All searches will be killed after this amount of time nomatter how bad the GMRT is. */
+#define MAX_TIMEOUT 10000
+
 /*--------------------Structures--------------------*/
 /**
  * A structure to give the user when performing a search so they can cancel it.
@@ -337,7 +341,8 @@ static void pingNode(Dict* args, void* vrouter, String* txid)
 static inline uint64_t tryNextNodeAfter(struct RouterModule* module)
 {
     uint64_t x = (((uint64_t) AverageRoller_getAverage(module->gmrtRoller)) * 4);
-    return x + (rand() % (x | 1)) / 2;
+    x = x + (rand() % (x | 1)) / 2;
+    return (x > MAX_TIMEOUT) ? MAX_TIMEOUT : x;
 }
 
 /**
@@ -823,7 +828,7 @@ static inline int handleReply(struct DHTMessage* message, struct RouterModule* m
         }
 
         uint32_t newNodePrefix = Address_getPrefix(&addr);
-        if (addr.ip6.bytes[0] != 0xfc) {
+        if (!AddressCalc_validAddress(addr.ip6.bytes)) {
             Log_debug(module->logger, "Was told garbage.\n");
             // This should never happen, badnode.
             break;
@@ -1132,7 +1137,7 @@ int RouterModule_pingNode(struct Node* node,
         Log_debug(module->logger, "Ping %s\n", addr);
     #endif
 
-    struct Allocator* pingAllocator = module->allocator->child(module->allocator);
+    struct Allocator* pingAllocator = Allocator_child(module->allocator);
     struct RouterModule_Ping* ping =
         pingAllocator->calloc(sizeof(struct RouterModule_Ping), 1, pingAllocator);
     *location = ping;

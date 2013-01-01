@@ -16,6 +16,7 @@
 #define string_strlen
 #include "crypto/Key.h"
 #include "memory/MallocAllocator.h"
+#include "memory/CanaryAllocator.h"
 #include "memory/Allocator.h"
 #include "util/Base32.h"
 #include "util/Checksum.h"
@@ -25,6 +26,8 @@
 #include "util/log/WriterLog.h"
 #include "io/FileWriter.h"
 #include "wire/Headers.h"
+#include "wire/Ethernet.h"
+#include "interface/TUNMessageType.h"
 
 #include <stdio.h>
 
@@ -32,6 +35,7 @@
 #define TUNA 1
 uint8_t incomingTunB(struct Message* msg, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(msg) == Ethernet_TYPE_IP6);
     Message_shift(msg, -Headers_IP6Header_SIZE);
     printf("Message from TUN in node B [%s]\n", msg->bytes);
     *((int*)iface->senderContext) = TUNB;
@@ -39,6 +43,7 @@ uint8_t incomingTunB(struct Message* msg, struct Interface* iface)
 }
 uint8_t incomingTunA(struct Message* msg, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(msg) == Ethernet_TYPE_IP6);
     Message_shift(msg, -Headers_IP6Header_SIZE);
     printf("Message from TUN in node A [%s]\n", msg->bytes);
     *((int*)iface->senderContext) = TUNA;
@@ -110,9 +115,11 @@ void sendMessage(struct TwoNodes* tn, char* message, bool bToA)
 
     if (bToA) {
         TestFramework_craftIPHeader(msg, tn->nodeB->ip, tn->nodeA->ip);
+        TUNMessageType_push(msg, Ethernet_TYPE_IP6);
         tn->tunIfB.receiveMessage(msg, &tn->tunIfB);
     } else {
         TestFramework_craftIPHeader(msg, tn->nodeA->ip, tn->nodeB->ip);
+        TUNMessageType_push(msg, Ethernet_TYPE_IP6);
         tn->tunIfA.receiveMessage(msg, &tn->tunIfA);
     }
 
@@ -122,7 +129,7 @@ void sendMessage(struct TwoNodes* tn, char* message, bool bToA)
 
 int main()
 {
-    struct Allocator* alloc = MallocAllocator_new(1<<22);
+    struct Allocator* alloc = CanaryAllocator_new(MallocAllocator_new(1<<22), NULL);
     struct TwoNodes* tn = setUp(alloc);
 
     sendMessage(tn, "Hello World!", true);

@@ -18,6 +18,13 @@ add_library(cjdmemory
     MallocAllocator.c
 )
 
+add_library(cjdns-memory-canary
+    CanaryAllocator.c
+)
+target_link_libraries(cjdns-memory-canary
+    cjdns-crypto-random
+)
+
 # Everything must be tested.
 enable_testing()
 add_subdirectory(test)

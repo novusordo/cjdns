@@ -9,12 +9,10 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-add_executable(IpTunnel_test
+set(Test_FILES
     IpTunnel_test.c
 )
-
-target_link_libraries(IpTunnel_test
+set(Test_LIBRARIES
     cjdns-tunnel-iptunnel
     cjdbenc
     cjdmemory
@@ -23,5 +21,6 @@ target_link_libraries(IpTunnel_test
     cjdbenc_StandardBencSerializer
     cjdns-crypto-random
     cjdns-util-events-libevent
+    cjdns-memory-canary
 )
-add_test(IpTunnel_test IpTunnel_test)
+include(${CMAKE_SOURCE_DIR}/cmake/modules/Test.cmake)

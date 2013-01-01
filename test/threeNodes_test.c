@@ -17,6 +17,7 @@
 #include "crypto/Key.h"
 #include "io/FileWriter.h"
 #include "memory/MallocAllocator.h"
+#include "memory/CanaryAllocator.h"
 #include "memory/Allocator.h"
 #include "util/Base32.h"
 #include "util/Checksum.h"
@@ -24,8 +25,9 @@
 #include "util/log/WriterLog.h"
 #include "test/TestFramework.h"
 #include "net/Ducttape_pvt.h"
-
 #include "wire/Headers.h"
+#include "wire/Ethernet.h"
+#include "interface/TUNMessageType.h"
 
 #include <stdio.h>
 
@@ -34,6 +36,7 @@
 #define TUNA 1
 uint8_t incomingTunC(struct Message* msg, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(msg) == Ethernet_TYPE_IP6);
     Message_shift(msg, -Headers_IP6Header_SIZE);
     printf("Message from TUN in node C [%s] [%d]\n", msg->bytes, msg->length);
     *((int*)iface->senderContext) = TUNC;
@@ -41,6 +44,7 @@ uint8_t incomingTunC(struct Message* msg, struct Interface* iface)
 }
 uint8_t incomingTunB(struct Message* msg, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(msg) == Ethernet_TYPE_IP6);
     Message_shift(msg, -Headers_IP6Header_SIZE);
     printf("Message from TUN in node B [%s]\n", msg->bytes);
     *((int*)iface->senderContext) = TUNB;
@@ -48,6 +52,7 @@ uint8_t incomingTunB(struct Message* msg, struct Interface* iface)
 }
 uint8_t incomingTunA(struct Message* msg, struct Interface* iface)
 {
+    Assert_true(TUNMessageType_pop(msg) == Ethernet_TYPE_IP6);
     Message_shift(msg, -Headers_IP6Header_SIZE);
     uint8_t buff[1024];
     Hex_encode(buff, 1024, msg->bytes, msg->length);
@@ -159,6 +164,7 @@ void sendMessage(struct ThreeNodes* tn,
         Assert_always(false);
     }
 
+    TUNMessageType_push(msg, Ethernet_TYPE_IP6);
     fromIf->receiveMessage(msg, fromIf);
 
     if (to == tn->nodeA) {
@@ -177,7 +183,7 @@ void sendMessage(struct ThreeNodes* tn,
 /** Check if nodes A and C can communicate via B without A knowing that C exists. */
 int main()
 {
-    struct Allocator* alloc = MallocAllocator_new(1<<22);
+    struct Allocator* alloc = CanaryAllocator_new(MallocAllocator_new(1<<22), NULL);
 
     struct ThreeNodes* tn = setUp(alloc);
 
